@@ -1,48 +1,32 @@
 const express = require('express');
-const cors = require('cors');
-const axios = require('axios');
-
 const app = express();
 
-// Middleware
-app.use(cors());
+// Enable CORS
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+  next();
+});
+
 app.use(express.json());
 
-// ========================
-// HELPER FUNCTIONS
-// ========================
-const cleanText = (text) => {
-  return text ? text.replace(/\s+/g, ' ').trim() : '';
-};
-
-const extractSalary = (text) => {
-  if (!text) return null;
-  const patterns = [
-    /\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s*-\s*\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/i,
-    /\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s*(?:to|-)\s*\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/i,
-  ];
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match) return match[0];
-  }
-  return null;
-};
-
-// ========================
-// MOCK DATA (for when scraping fails)
-// ========================
-const mockJobs = [
+// Mock job data
+const jobsDatabase = [
   {
     id: '1',
     title: 'Senior Software Engineer',
     company: 'Tech Corp',
     location: 'San Francisco, CA',
     salary: '$150,000 - $200,000',
-    description: 'Looking for senior software engineer with 5+ years experience.',
-    url: 'https://example.com/job1',
+    description: 'Looking for senior software engineer with 5+ years experience in JavaScript, React, and Node.js.',
+    fullDescription: 'We are seeking a Senior Software Engineer to join our growing team. You will be responsible for designing, developing, and maintaining our web applications. Requirements: 5+ years of experience, proficiency in JavaScript/TypeScript, React, Node.js, and cloud technologies.',
+    url: 'https://techcorp.com/careers/1',
     source: 'indeed',
     remote: false,
-    posted: '2024-01-15'
+    posted: '2024-01-15',
+    experience: 'Senior',
+    type: 'Full-time',
+    skills: ['JavaScript', 'React', 'Node.js', 'AWS', 'TypeScript']
   },
   {
     id: '2',
@@ -50,11 +34,15 @@ const mockJobs = [
     company: 'Startup Inc',
     location: 'Remote',
     salary: '$120,000 - $160,000',
-    description: 'Frontend developer with React experience needed.',
-    url: 'https://example.com/job2',
+    description: 'Frontend developer with React experience needed for fast-growing startup.',
+    fullDescription: 'Join our team as a Frontend Developer working on cutting-edge web applications. You will collaborate with designers and backend engineers to create amazing user experiences.',
+    url: 'https://startupinc.com/jobs/2',
     source: 'remoteok',
     remote: true,
-    posted: '2024-01-14'
+    posted: '2024-01-14',
+    experience: 'Mid-level',
+    type: 'Full-time',
+    skills: ['React', 'JavaScript', 'CSS', 'HTML', 'Redux']
   },
   {
     id: '3',
@@ -63,10 +51,14 @@ const mockJobs = [
     location: 'New York, NY',
     salary: '$130,000 - $180,000',
     description: 'DevOps engineer with AWS and Kubernetes experience.',
-    url: 'https://example.com/job3',
+    fullDescription: 'DevOps Engineer needed to manage our cloud infrastructure and CI/CD pipelines. Experience with Docker, Kubernetes, AWS, and Terraform required.',
+    url: 'https://cloudsystems.com/careers/3',
     source: 'indeed',
     remote: false,
-    posted: '2024-01-13'
+    posted: '2024-01-13',
+    experience: 'Senior',
+    type: 'Full-time',
+    skills: ['AWS', 'Kubernetes', 'Docker', 'Terraform', 'CI/CD']
   },
   {
     id: '4',
@@ -74,11 +66,15 @@ const mockJobs = [
     company: 'Digital Solutions',
     location: 'Austin, TX',
     salary: '$110,000 - $150,000',
-    description: 'Full stack developer with Node.js and React.',
-    url: 'https://example.com/job4',
+    description: 'Full stack developer with Node.js and React experience.',
+    fullDescription: 'Full Stack Developer position working on both frontend and backend systems. We use modern JavaScript technologies across the stack.',
+    url: 'https://digitalsolutions.com/jobs/4',
     source: 'indeed',
     remote: false,
-    posted: '2024-01-12'
+    posted: '2024-01-12',
+    experience: 'Mid-level',
+    type: 'Full-time',
+    skills: ['Node.js', 'React', 'MongoDB', 'Express', 'JavaScript']
   },
   {
     id: '5',
@@ -87,10 +83,14 @@ const mockJobs = [
     location: 'Remote',
     salary: '$140,000 - $190,000',
     description: 'Data scientist with machine learning experience.',
-    url: 'https://example.com/job5',
+    fullDescription: 'Data Scientist position focusing on machine learning models and data analysis. Python, TensorFlow, and statistical analysis experience required.',
+    url: 'https://airesearch.com/careers/5',
     source: 'remoteok',
     remote: true,
-    posted: '2024-01-11'
+    posted: '2024-01-11',
+    experience: 'Senior',
+    type: 'Full-time',
+    skills: ['Python', 'Machine Learning', 'TensorFlow', 'SQL', 'Statistics']
   },
   {
     id: '6',
@@ -99,10 +99,14 @@ const mockJobs = [
     location: 'Los Angeles, CA',
     salary: '$100,000 - $140,000',
     description: 'Mobile developer for iOS and Android applications.',
-    url: 'https://example.com/job6',
+    fullDescription: 'Mobile Developer needed to build cross-platform mobile applications using React Native.',
+    url: 'https://appcreators.com/jobs/6',
     source: 'indeed',
     remote: false,
-    posted: '2024-01-10'
+    posted: '2024-01-10',
+    experience: 'Mid-level',
+    type: 'Full-time',
+    skills: ['React Native', 'JavaScript', 'iOS', 'Android', 'Mobile']
   },
   {
     id: '7',
@@ -111,10 +115,14 @@ const mockJobs = [
     location: 'Remote',
     salary: '$130,000 - $170,000',
     description: 'Backend engineer with Python and Django experience.',
-    url: 'https://example.com/job7',
+    fullDescription: 'Backend Engineer specializing in API development and microservices architecture.',
+    url: 'https://apimasters.com/careers/7',
     source: 'remoteok',
     remote: true,
-    posted: '2024-01-09'
+    posted: '2024-01-09',
+    experience: 'Senior',
+    type: 'Full-time',
+    skills: ['Python', 'Django', 'PostgreSQL', 'REST API', 'Docker']
   },
   {
     id: '8',
@@ -123,125 +131,182 @@ const mockJobs = [
     location: 'Chicago, IL',
     salary: '$90,000 - $130,000',
     description: 'UI/UX designer with Figma and prototyping skills.',
-    url: 'https://example.com/job8',
+    fullDescription: 'UI/UX Designer needed to create beautiful and functional user interfaces.',
+    url: 'https://designstudio.com/jobs/8',
     source: 'indeed',
     remote: false,
-    posted: '2024-01-08'
+    posted: '2024-01-08',
+    experience: 'Mid-level',
+    type: 'Full-time',
+    skills: ['Figma', 'UI Design', 'UX Design', 'Prototyping', 'Adobe XD']
+  },
+  {
+    id: '9',
+    title: 'Product Manager',
+    company: 'Tech Products Inc',
+    location: 'Seattle, WA',
+    salary: '$140,000 - $180,000',
+    description: 'Product Manager for software products.',
+    fullDescription: 'Product Manager responsible for product strategy and roadmap.',
+    url: 'https://techproducts.com/careers/9',
+    source: 'indeed',
+    remote: false,
+    posted: '2024-01-07',
+    experience: 'Senior',
+    type: 'Full-time',
+    skills: ['Product Management', 'Agile', 'Strategy', 'Roadmapping']
+  },
+  {
+    id: '10',
+    title: 'QA Engineer',
+    company: 'Quality First',
+    location: 'Remote',
+    salary: '$85,000 - $120,000',
+    description: 'QA Engineer with automation testing experience.',
+    fullDescription: 'Quality Assurance Engineer focused on automated testing and quality processes.',
+    url: 'https://qualityfirst.com/jobs/10',
+    source: 'remoteok',
+    remote: true,
+    posted: '2024-01-06',
+    experience: 'Mid-level',
+    type: 'Full-time',
+    skills: ['Testing', 'Automation', 'Selenium', 'Cypress', 'QA']
   }
 ];
 
-// ========================
-// SCRAPER FUNCTIONS
-// ========================
-async function scrapeIndeed(keywords, location) {
-  try {
-    const url = `https://www.indeed.com/jobs?q=${encodeURIComponent(keywords)}&l=${encodeURIComponent(location)}`;
-    
-    const response = await axios.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-      },
-      timeout: 5000
-    });
-    
-    // Parse HTML - simplified version
-    const html = response.data;
-    const jobs = [];
-    
-    // Try to extract job titles (simple regex approach)
-    const titleRegex = /class="[^"]*jobTitle[^"]*"[^>]*>([^<]+)</g;
-    let match;
-    while ((match = titleRegex.exec(html)) !== null) {
-      jobs.push({
-        id: `indeed_${Date.now()}_${jobs.length}`,
-        title: cleanText(match[1]),
-        company: 'Company Name',
-        location: location || 'Various Locations',
-        salary: null,
-        description: 'Job description available on Indeed',
-        url: 'https://indeed.com',
-        source: 'indeed',
-        remote: location.toLowerCase().includes('remote'),
-        posted: new Date().toISOString().split('T')[0]
-      });
-      
-      if (jobs.length >= 10) break;
+// More jobs for variety
+for (let i = 11; i <= 50; i++) {
+  const templates = [
+    {
+      title: `Software Engineer ${i}`,
+      company: ['Tech Corp', 'Startup Inc', 'Cloud Systems', 'Digital Solutions'][Math.floor(Math.random() * 4)],
+      location: ['San Francisco, CA', 'New York, NY', 'Remote', 'Austin, TX', 'Boston, MA'][Math.floor(Math.random() * 5)],
+      salary: `$${Math.floor(Math.random() * 50) + 100},000 - $${Math.floor(Math.random() * 80) + 150,000}`,
+      remote: Math.random() > 0.5,
+      skills: [['JavaScript', 'React', 'Node.js'], ['Python', 'Django', 'PostgreSQL'], ['Java', 'Spring', 'Microservices']][Math.floor(Math.random() * 3)]
+    },
+    {
+      title: `DevOps Specialist ${i}`,
+      company: ['Cloud Systems', 'Tech Corp', 'Infra Tech'][Math.floor(Math.random() * 3)],
+      location: ['Remote', 'New York, NY', 'Seattle, WA'][Math.floor(Math.random() * 3)],
+      salary: `$${Math.floor(Math.random() * 40) + 120},000 - $${Math.floor(Math.random() * 70) + 160,000}`,
+      remote: true,
+      skills: ['AWS', 'Kubernetes', 'Docker', 'Terraform']
     }
-    
-    return jobs.length > 0 ? jobs : mockJobs.filter(j => j.source === 'indeed').slice(0, 4);
-  } catch (error) {
-    console.log('Indeed scrape failed, using mock data');
-    return mockJobs.filter(j => j.source === 'indeed').slice(0, 4);
-  }
+  ];
+  
+  const template = templates[Math.floor(Math.random() * templates.length)];
+  const isRemote = template.location === 'Remote' || template.remote;
+  
+  jobsDatabase.push({
+    id: i.toString(),
+    title: template.title,
+    company: template.company,
+    location: template.location,
+    salary: template.salary,
+    description: `${template.title} position at ${template.company}. Requires experience with ${template.skills.join(', ')}.`,
+    fullDescription: `We are hiring a ${template.title} to join our team. This position requires expertise in ${template.skills.join(', ')}. Competitive salary and benefits package.`,
+    url: `https://example.com/jobs/${i}`,
+    source: isRemote ? 'remoteok' : 'indeed',
+    remote: isRemote,
+    posted: `2024-01-${Math.floor(Math.random() * 15) + 1}`,
+    experience: ['Junior', 'Mid-level', 'Senior'][Math.floor(Math.random() * 3)],
+    type: 'Full-time',
+    skills: template.skills
+  });
 }
 
-async function scrapeRemoteOK(keywords) {
-  try {
-    const url = `https://remoteok.com/remote-${encodeURIComponent(keywords)}-jobs`;
+// Helper function to filter jobs
+function filterJobs(keywords = '', location = '', remoteOnly = false) {
+  const searchTerm = keywords.toLowerCase();
+  const locationTerm = location.toLowerCase();
+  
+  return jobsDatabase.filter(job => {
+    // Keyword search
+    const matchesKeywords = !searchTerm || 
+      job.title.toLowerCase().includes(searchTerm) ||
+      job.company.toLowerCase().includes(searchTerm) ||
+      job.description.toLowerCase().includes(searchTerm) ||
+      job.skills.some(skill => skill.toLowerCase().includes(searchTerm));
     
-    const response = await axios.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      timeout: 5000
-    });
+    // Location search
+    const matchesLocation = !locationTerm || 
+      job.location.toLowerCase().includes(locationTerm) ||
+      (locationTerm === 'remote' && job.remote);
     
-    const html = response.data;
-    const jobs = [];
+    // Remote filter
+    const matchesRemote = !remoteOnly || job.remote;
     
-    // Try to find job listings
-    if (html.includes('remote jobs')) {
-      for (let i = 0; i < 5; i++) {
-        jobs.push({
-          id: `remoteok_${Date.now()}_${i}`,
-          title: `${keywords} Developer`,
-          company: 'Remote Company',
-          location: 'Remote',
-          salary: '$100,000 - $150,000',
-          description: 'Remote position for skilled developer',
-          url: 'https://remoteok.com',
-          source: 'remoteok',
-          remote: true,
-          posted: new Date().toISOString().split('T')[0]
-        });
-      }
-    }
-    
-    return jobs.length > 0 ? jobs : mockJobs.filter(j => j.source === 'remoteok').slice(0, 4);
-  } catch (error) {
-    console.log('RemoteOK scrape failed, using mock data');
-    return mockJobs.filter(j => j.source === 'remoteok').slice(0, 4);
-  }
+    return matchesKeywords && matchesLocation && matchesRemote;
+  });
 }
 
 // ========================
 // API ENDPOINTS
 // ========================
 
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Jobs Scraper API',
+    version: '1.0.0',
+    description: 'API for job search and listings',
+    endpoints: {
+      health: '/api/health',
+      search: '/api/search/:keywords',
+      searchWithLocation: '/api/search/:keywords/:location',
+      jobDetails: '/api/job/:id',
+      trending: '/api/trending',
+      trendingCategory: '/api/trending/:category',
+      stats: '/api/stats',
+      allJobs: '/api/jobs'
+    },
+    example: '/api/search/software%20engineer?remote=true'
+  });
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    service: 'Jobs Scraper API',
+    uptime: process.uptime(),
     version: '1.0.0',
-    endpoints: [
-      '/api/health',
-      '/api/search/:keywords',
-      '/api/search/:keywords/:location',
-      '/api/job/:id',
-      '/api/trending',
-      '/api/trending/:category'
-    ]
+    totalJobs: jobsDatabase.length
+  });
+});
+
+// Get all jobs (for testing)
+app.get('/api/jobs', (req, res) => {
+  const { limit = 20, page = 1 } = req.query;
+  const start = (page - 1) * limit;
+  const end = start + parseInt(limit);
+  
+  const jobs = jobsDatabase.slice(start, end).map(job => ({
+    id: job.id,
+    title: job.title,
+    company: job.company,
+    location: job.location,
+    salary: job.salary,
+    remote: job.remote,
+    source: job.source
+  }));
+  
+  res.json({
+    success: true,
+    page: parseInt(page),
+    limit: parseInt(limit),
+    total: jobsDatabase.length,
+    totalPages: Math.ceil(jobsDatabase.length / limit),
+    jobs
   });
 });
 
 // Main search endpoint
-app.get('/api/search/:keywords', async (req, res) => {
+app.get('/api/search/:keywords', (req, res) => {
   try {
     const { keywords } = req.params;
-    const { location = '', remote = 'false' } = req.query;
+    const { location = '', remote = false } = req.query;
     
     if (!keywords) {
       return res.status(400).json({
@@ -250,43 +315,19 @@ app.get('/api/search/:keywords', async (req, res) => {
       });
     }
     
-    console.log(`Searching for: ${keywords} in ${location}`);
-    
-    // Get jobs from multiple sources
-    const [indeedJobs, remoteokJobs] = await Promise.all([
-      scrapeIndeed(keywords, location),
-      scrapeRemoteOK(keywords)
-    ]);
-    
-    // Combine and filter
-    let allJobs = [...indeedJobs, ...remoteokJobs];
-    
-    // Filter by remote if requested
-    if (remote === 'true') {
-      allJobs = allJobs.filter(job => job.remote === true);
-    }
-    
-    // Filter by location if specified
-    if (location && location.toLowerCase() !== 'remote') {
-      allJobs = allJobs.filter(job => 
-        job.location.toLowerCase().includes(location.toLowerCase()) || 
-        job.remote === true
-      );
-    }
-    
-    // Limit results
-    const jobs = allJobs.slice(0, 30);
+    const remoteOnly = remote === 'true' || remote === true;
+    const filteredJobs = filterJobs(keywords, location, remoteOnly);
     
     res.json({
       success: true,
       search: {
         keywords,
         location: location || 'anywhere',
-        remote: remote === 'true'
+        remote: remoteOnly
       },
       results: {
-        count: jobs.length,
-        jobs: jobs.map(job => ({
+        total: filteredJobs.length,
+        jobs: filteredJobs.slice(0, 30).map(job => ({
           id: job.id,
           title: job.title,
           company: job.company,
@@ -294,59 +335,17 @@ app.get('/api/search/:keywords', async (req, res) => {
           salary: job.salary,
           remote: job.remote,
           source: job.source,
-          url: job.url,
-          description: job.description?.substring(0, 150) + '...'
+          posted: job.posted,
+          description: job.description.substring(0, 100) + '...',
+          skills: job.skills.slice(0, 3)
         }))
       },
       metadata: {
         timestamp: new Date().toISOString(),
-        sources: ['indeed', 'remoteok']
+        processingTime: '0ms'
       }
     });
     
-  } catch (error) {
-    console.error('Search error:', error);
-    
-    // Fallback to mock data
-    const filteredMock = mockJobs
-      .filter(job => 
-        job.title.toLowerCase().includes(req.params.keywords?.toLowerCase() || '') ||
-        job.description.toLowerCase().includes(req.params.keywords?.toLowerCase() || '')
-      )
-      .slice(0, 10);
-    
-    res.json({
-      success: true,
-      message: 'Using mock data (scraping temporarily unavailable)',
-      search: {
-        keywords: req.params.keywords,
-        location: req.query.location || 'anywhere',
-        remote: req.query.remote === 'true'
-      },
-      results: {
-        count: filteredMock.length,
-        jobs: filteredMock
-      },
-      metadata: {
-        timestamp: new Date().toISOString(),
-        note: 'Mock data fallback'
-      }
-    });
-  }
-});
-
-// Search with location in path
-app.get('/api/search/:keywords/:location', async (req, res) => {
-  try {
-    const { keywords, location } = req.params;
-    const { remote = 'false' } = req.query;
-    
-    req.params.keywords = keywords;
-    req.query.location = location;
-    req.query.remote = remote;
-    
-    // Reuse the main search handler
-    return app._router.handle(req, res);
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -356,58 +355,68 @@ app.get('/api/search/:keywords/:location', async (req, res) => {
   }
 });
 
+// Search with location in path
+app.get('/api/search/:keywords/:location', (req, res) => {
+  const { keywords, location } = req.params;
+  req.params.keywords = keywords;
+  req.query.location = location;
+  
+  // Reuse the main search handler
+  const mockReq = { 
+    params: { keywords }, 
+    query: { location, remote: req.query.remote } 
+  };
+  const mockRes = {
+    status: (code) => ({
+      json: (data) => res.status(code).json(data)
+    }),
+    json: (data) => res.json(data)
+  };
+  
+  return app._router.handle({ 
+    method: 'GET', 
+    url: `/api/search/${keywords}`, 
+    params: { keywords }, 
+    query: { location, remote: req.query.remote } 
+  }, res, () => {});
+});
+
 // Job details endpoint
 app.get('/api/job/:id', (req, res) => {
   const { id } = req.params;
+  const job = jobsDatabase.find(j => j.id === id);
   
-  // Find job in mock data or create a detailed response
-  const job = mockJobs.find(j => j.id === id) || {
-    id,
-    title: 'Software Engineer',
-    company: 'Tech Company',
-    location: 'Remote',
-    salary: '$120,000 - $160,000',
-    description: 'Full job description would be shown here. This includes requirements, responsibilities, benefits, and application instructions.',
-    fullDescription: `We are looking for a skilled Software Engineer to join our team. 
-    
-    Responsibilities:
-    - Develop and maintain web applications
-    - Collaborate with team members
-    - Write clean, efficient code
-    - Participate in code reviews
-    
-    Requirements:
-    - 3+ years of experience
-    - Proficiency in JavaScript/Node.js
-    - Experience with React or similar frameworks
-    - Strong problem-solving skills
-    
-    Benefits:
-    - Competitive salary
-    - Health insurance
-    - Remote work options
-    - Professional development`,
-    requirements: ['3+ years experience', 'JavaScript/Node.js', 'React framework', 'Problem-solving skills'],
-    benefits: ['Competitive salary', 'Health insurance', 'Remote work', 'Professional development'],
-    url: 'https://example.com/apply',
-    source: 'indeed',
-    remote: true,
-    posted: '2024-01-15',
-    expires: '2024-02-15',
-    experience: 'Mid-level',
-    jobType: 'Full-time'
-  };
+  if (!job) {
+    return res.status(404).json({
+      success: false,
+      error: 'Job not found'
+    });
+  }
   
   res.json({
     success: true,
     job: {
       ...job,
-      applicationInstructions: 'Apply through the provided URL or company website.',
+      applicationInstructions: 'Apply through the company website or the provided URL.',
       tips: [
-        'Tailor your resume to match the job description',
-        'Highlight relevant experience',
-        'Prepare for technical interviews'
-      ]
+        'Tailor your resume to match the job requirements',
+        'Highlight relevant experience and skills',
+        'Prepare for technical interviews if applicable'
+      ],
+      similarJobs: jobsDatabase
+        .filter(j => 
+          j.id !== id && 
+          (j.skills.some(skill => job.skills.includes(skill)) || j.company === job.company)
+        )
+        .slice(0, 3)
+        .map(j => ({
+          id: j.id,
+          title: j.title,
+          company: j.company,
+          location: j.location,
+          salary: j.salary,
+          remote: j.remote
+        }))
     },
     metadata: {
       timestamp: new Date().toISOString()
@@ -419,32 +428,48 @@ app.get('/api/job/:id', (req, res) => {
 app.get('/api/trending', (req, res) => {
   const { category = 'all', limit = 10 } = req.query;
   
-  let trendingJobs = [...mockJobs];
+  let trendingJobs = [...jobsDatabase];
   
-  // Filter by category if specified
+  // Sort by newest first
+  trendingJobs.sort((a, b) => new Date(b.posted) - new Date(a.posted));
+  
+  // Filter by category
   if (category !== 'all') {
     trendingJobs = trendingJobs.filter(job => {
-      if (category === 'remote') return job.remote === true;
-      if (category === 'software-engineer') return job.title.toLowerCase().includes('software');
-      if (category === 'web-developer') return job.title.toLowerCase().includes('developer');
+      if (category === 'remote') return job.remote;
+      if (category === 'software-engineer') return job.title.toLowerCase().includes('software') || job.title.toLowerCase().includes('engineer');
+      if (category === 'web-developer') return job.title.toLowerCase().includes('web') || job.title.toLowerCase().includes('frontend') || job.title.toLowerCase().includes('full stack');
       if (category === 'data-scientist') return job.title.toLowerCase().includes('data');
+      if (category === 'devops') return job.title.toLowerCase().includes('devops') || job.skills.includes('AWS') || job.skills.includes('Kubernetes');
       return true;
     });
   }
+  
+  const limitedJobs = trendingJobs.slice(0, parseInt(limit));
   
   res.json({
     success: true,
     category,
     results: {
-      jobs: trendingJobs.slice(0, parseInt(limit)),
-      count: trendingJobs.length
+      jobs: limitedJobs.map(job => ({
+        id: job.id,
+        title: job.title,
+        company: job.company,
+        location: job.location,
+        salary: job.salary,
+        remote: job.remote,
+        posted: job.posted,
+        skills: job.skills.slice(0, 3)
+      })),
+      count: limitedJobs.length,
+      total: trendingJobs.length
     },
     popularCategories: [
-      { name: 'software-engineer', title: 'Software Engineer', count: 25 },
-      { name: 'web-developer', title: 'Web Developer', count: 18 },
-      { name: 'data-scientist', title: 'Data Scientist', count: 12 },
-      { name: 'remote', title: 'Remote Jobs', count: 30 },
-      { name: 'devops', title: 'DevOps', count: 8 }
+      { id: 'software-engineer', name: 'Software Engineer', count: jobsDatabase.filter(j => j.title.toLowerCase().includes('software')).length },
+      { id: 'web-developer', name: 'Web Developer', count: jobsDatabase.filter(j => j.title.toLowerCase().includes('web') || j.title.toLowerCase().includes('frontend')).length },
+      { id: 'data-scientist', name: 'Data Scientist', count: jobsDatabase.filter(j => j.title.toLowerCase().includes('data')).length },
+      { id: 'devops', name: 'DevOps', count: jobsDatabase.filter(j => j.title.toLowerCase().includes('devops')).length },
+      { id: 'remote', name: 'Remote Jobs', count: jobsDatabase.filter(j => j.remote).length }
     ],
     metadata: {
       timestamp: new Date().toISOString()
@@ -455,80 +480,88 @@ app.get('/api/trending', (req, res) => {
 // Trending by category
 app.get('/api/trending/:category', (req, res) => {
   const { category } = req.params;
+  const { limit = 10 } = req.query;
+  
   req.query.category = category;
-  return app._router.handle(req, res);
+  req.query.limit = limit;
+  
+  // Call trending endpoint
+  return app._router.handle(req, res, () => {});
 });
 
 // Statistics
 app.get('/api/stats', (req, res) => {
+  const remoteJobs = jobsDatabase.filter(j => j.remote).length;
+  const averageSalary = jobsDatabase.reduce((sum, job) => {
+    const mid = job.salary ? parseInt(job.salary.match(/\$(\d+),/)?.[1] || '120') * 1000 : 120000;
+    return sum + mid;
+  }, 0) / jobsDatabase.length;
+  
+  // Count jobs by location
+  const locations = {};
+  jobsDatabase.forEach(job => {
+    locations[job.location] = (locations[job.location] || 0) + 1;
+  });
+  
+  // Count jobs by skill
+  const skills = {};
+  jobsDatabase.forEach(job => {
+    job.skills.forEach(skill => {
+      skills[skill] = (skills[skill] || 0) + 1;
+    });
+  });
+  
   res.json({
     success: true,
     stats: {
-      totalJobs: mockJobs.length * 1000,
-      remoteJobs: mockJobs.filter(j => j.remote).length * 200,
-      averageSalary: '$125,000',
-      topLocations: [
-        { location: 'Remote', count: 1500 },
-        { location: 'San Francisco, CA', count: 850 },
-        { location: 'New York, NY', count: 720 },
-        { location: 'Austin, TX', count: 450 },
-        { location: 'Chicago, IL', count: 380 }
-      ],
-      topCompanies: [
-        { company: 'Tech Corp', count: 120 },
-        { company: 'Startup Inc', count: 85 },
-        { company: 'Cloud Systems', count: 67 },
-        { company: 'Digital Solutions', count: 54 },
-        { company: 'AI Research', count: 42 }
-      ]
+      totalJobs: jobsDatabase.length,
+      remoteJobs,
+      remotePercentage: Math.round((remoteJobs / jobsDatabase.length) * 100),
+      averageSalary: `$${Math.round(averageSalary / 1000)}k`,
+      topLocations: Object.entries(locations)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([location, count]) => ({ location, count })),
+      topSkills: Object.entries(skills)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([skill, count]) => ({ skill, count })),
+      jobsBySource: {
+        indeed: jobsDatabase.filter(j => j.source === 'indeed').length,
+        remoteok: jobsDatabase.filter(j => j.source === 'remoteok').length
+      }
     },
     metadata: {
       timestamp: new Date().toISOString(),
-      updated: 'Daily'
+      dataSource: 'Mock database',
+      lastUpdated: '2024-01-15'
     }
   });
 });
 
-// Root endpoint
-app.get('/', (req, res) => {
-  res.json({
-    message: 'Jobs Scraper API',
-    version: '1.0.0',
-    documentation: 'Add /api/health to see available endpoints',
-    endpoints: {
-      health: '/api/health',
-      search: '/api/search/{keywords}?location={location}&remote={true/false}',
-      jobDetails: '/api/job/{id}',
-      trending: '/api/trending?category={category}&limit={number}',
-      stats: '/api/stats'
-    },
-    example: 'https://your-api.vercel.app/api/search/software%20engineer?location=remote&remote=true'
-  });
-});
-
-// ========================
-// ERROR HANDLING
-// ========================
-app.use((req, res, next) => {
+// 404 handler
+app.use((req, res) => {
   res.status(404).json({
     success: false,
     error: 'Endpoint not found',
-    message: `Route ${req.url} not found`,
-    available: [
-      '/',
-      '/api/health',
-      '/api/search/{keywords}',
-      '/api/search/{keywords}/{location}',
-      '/api/job/{id}',
-      '/api/trending',
-      '/api/trending/{category}',
-      '/api/stats'
+    message: `The route ${req.url} does not exist`,
+    availableEndpoints: [
+      'GET /',
+      'GET /api/health',
+      'GET /api/jobs',
+      'GET /api/search/:keywords',
+      'GET /api/search/:keywords/:location',
+      'GET /api/job/:id',
+      'GET /api/trending',
+      'GET /api/trending/:category',
+      'GET /api/stats'
     ]
   });
 });
 
+// Error handler
 app.use((err, req, res, next) => {
-  console.error('Server error:', err);
+  console.error('Error:', err.message);
   res.status(500).json({
     success: false,
     error: 'Internal server error',
@@ -536,29 +569,27 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ========================
-// SERVER START (Local only)
-// ========================
+// Start server (local only)
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
     console.log(`
-    🚀 Jobs Scraper API running on port ${PORT}
+    ✅ Jobs Scraper API running on port ${PORT}
     
-    Health: http://localhost:${PORT}/api/health
-    Search: http://localhost:${PORT}/api/search/software%20engineer
-    Trending: http://localhost:${PORT}/api/trending
-    Stats: http://localhost:${PORT}/api/stats
+    Health:     http://localhost:${PORT}/api/health
+    All Jobs:   http://localhost:${PORT}/api/jobs
+    Search:     http://localhost:${PORT}/api/search/software%20engineer
+    Trending:   http://localhost:${PORT}/api/trending
+    Stats:      http://localhost:${PORT}/api/stats
     
-    Example searches:
+    Examples:
     - http://localhost:${PORT}/api/search/web%20developer?remote=true
     - http://localhost:${PORT}/api/search/data%20scientist/remote
-    - http://localhost:${PORT}/api/trending/remote
+    - http://localhost:${Port}/api/trending/remote?limit=5
+    - http://localhost:${Port}/api/job/1
     `);
   });
 }
 
-// ========================
-// VERCEL EXPORT (Required)
-// ========================
+// Export for Vercel
 module.exports = app;
