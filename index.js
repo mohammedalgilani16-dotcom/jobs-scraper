@@ -6,8 +6,6 @@ const compression = require('compression');
 const { query, validationResult } = require('express-validator');
 const axios = require('axios');
 const cheerio = require('cheerio');
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const NodeCache = require('node-cache');
 const { v4: uuidv4 } = require('uuid');
 const winston = require('winston');
@@ -24,27 +22,37 @@ const CONFIG = {
   cache: new NodeCache({ stdTTL: 600, checkperiod: 120 }),
   
   // Request timeout
-  requestTimeout: 25000,
+  requestTimeout: 10000,
   
   // Max jobs per response
-  maxJobsPerResponse: 50,
+  maxJobsPerResponse: 30,
   
-  // Job sources configuration
+  // Job sources configuration (NO Puppeteer required)
   sources: {
     indeed: {
       baseUrl: 'https://www.indeed.com/jobs',
       enabled: true,
-      requiresBrowser: false
+      maxJobs: 20
     },
     remoteok: {
       baseUrl: 'https://remoteok.com/remote',
       enabled: true,
-      requiresBrowser: false
+      maxJobs: 15
     },
     linkedin: {
-      baseUrl: 'https://www.linkedin.com/jobs/search',
+      baseUrl: 'https://linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search',
+      enabled: false, // LinkedIn API is tricky without browser
+      maxJobs: 15
+    },
+    github: {
+      baseUrl: 'https://jobs.github.com/positions.json',
       enabled: true,
-      requiresBrowser: true
+      maxJobs: 15
+    },
+    reed: {
+      baseUrl: 'https://www.reed.co.uk/api/1.0/search',
+      enabled: false, // Requires API key
+      maxJobs: 15
     }
   },
   
@@ -185,11 +193,11 @@ const extractSkills = (description) => {
     }
   });
   
-  return foundSkills.slice(0, 10); // Limit to 10 skills
+  return foundSkills.slice(0, 10);
 };
 
 const normalizeJobData = (job, source) => {
-  const isRemote = source === 'remoteok' || 
+  const isRemote = source === 'remoteok' || source === 'github' || 
                   (job.location && job.location.toLowerCase().includes('remote'));
   
   const normalizedJob = {
@@ -199,11 +207,11 @@ const normalizeJobData = (job, source) => {
     location: cleanText(job.location) || (isRemote ? 'Remote' : 'Not specified'),
     salary: extractSalary(job.salary || job.description || ''),
     description: cleanText(job.description) || '',
-    url: job.url || '',
+    url: job.url || job.apply_url || '',
     source: source,
-    postedDate: job.postedDate || new Date().toISOString().split('T')[0],
+    postedDate: job.postedDate || job.created_at || new Date().toISOString().split('T')[0],
     remote: isRemote,
-    jobType: job.jobType || 'Full-time',
+    jobType: job.type || job.jobType || 'Full-time',
     experience: job.experience || 'Not specified'
   };
   
@@ -216,47 +224,23 @@ const normalizeJobData = (job, source) => {
 // ========================
 // DATA STORAGE (In-memory for demo)
 // ========================
-const jobsStore = new Map(); // Store jobs by ID for details endpoint
+const jobsStore = new Map();
 
 // ========================
-// SCRAPER FUNCTIONS
+// SCRAPER FUNCTIONS (NO PUPPETEER)
 // ========================
 class JobScraper {
   constructor() {
-    this.browser = null;
+    this.userAgents = [
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    ];
   }
 
-  async getBrowser() {
-    if (!this.browser) {
-      try {
-        this.browser = await puppeteer.launch({
-          headless: 'new',
-          args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--disable-gpu'
-          ],
-          timeout: CONFIG.requestTimeout
-        });
-      } catch (error) {
-        logger.error('Failed to launch browser:', error.message);
-        return null;
-      }
-    }
-    return this.browser;
-  }
-
-  async closeBrowser() {
-    if (this.browser) {
-      try {
-        await this.browser.close();
-      } catch (error) {
-        logger.error('Error closing browser:', error.message);
-      }
-      this.browser = null;
-    }
+  getRandomUserAgent() {
+    return this.userAgents[Math.floor(Math.random() * this.userAgents.length)];
   }
 
   async scrapeIndeed(keywords, location) {
@@ -269,12 +253,13 @@ class JobScraper {
       
       const response = await axios.get(url.toString(), {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'User-Agent': this.getRandomUserAgent(),
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
           'Accept-Language': 'en-US,en;q=0.5',
           'Accept-Encoding': 'gzip, deflate, br',
           'Connection': 'keep-alive',
-          'Upgrade-Insecure-Requests': '1'
+          'Upgrade-Insecure-Requests': '1',
+          'Cache-Control': 'no-cache'
         },
         timeout: CONFIG.requestTimeout
       });
@@ -282,40 +267,57 @@ class JobScraper {
       const $ = cheerio.load(response.data);
       const jobs = [];
       
-      // Indeed job listing selectors
+      // Indeed job listing selectors - updated for 2024
       const jobSelectors = [
         '.job_seen_beacon',
         '.result',
-        '[data-tn-component="organicJob"]'
+        '[data-tn-component="organicJob"]',
+        '.cardOutline'
       ];
       
       let jobElements = $();
       jobSelectors.forEach(selector => {
-        jobElements = jobElements.add($(selector));
+        const elements = $(selector);
+        if (elements.length > 0) {
+          jobElements = jobElements.add(elements);
+        }
       });
+      
+      // Fallback: try to find any job-like elements
+      if (jobElements.length === 0) {
+        jobElements = $('div[class*="job"], div[class*="Job"]');
+      }
       
       jobElements.each((i, element) => {
         try {
           const title = $(element).find('.jobTitle').text() || 
                        $(element).find('.jobtitle').text() ||
-                       $(element).find('h2.jobTitle').text();
+                       $(element).find('h2.jobTitle').text() ||
+                       $(element).find('h2[class*="title"]').text() ||
+                       $(element).find('h2').first().text();
           
           const company = $(element).find('.companyName').text() || 
                          $(element).find('.company').text() ||
-                         $(element).find('.companyName a').text();
+                         $(element).find('.companyName a').text() ||
+                         $(element).find('[class*="company"]').text();
           
           const locationText = $(element).find('.companyLocation').text() || 
-                              $(element).find('.location').text();
+                              $(element).find('.location').text() ||
+                              $(element).find('[class*="location"]').text();
           
           const salary = $(element).find('.salary-snippet').text() || 
-                        $(element).find('.salaryText').text();
+                        $(element).find('.salaryText').text() ||
+                        $(element).find('[class*="salary"]').text();
           
           const description = $(element).find('.job-snippet').text() || 
-                            $(element).find('.summary').text();
+                            $(element).find('.summary').text() ||
+                            $(element).find('[class*="snippet"]').text() ||
+                            $(element).find('[class*="description"]').text();
           
           let url = $(element).find('.jcs-JobTitle').attr('href') ||
                    $(element).find('a.jobtitle').attr('href') ||
-                   $(element).find('a').attr('href');
+                   $(element).find('a[class*="job"]').attr('href') ||
+                   $(element).find('a').first().attr('href');
           
           if (url && !url.startsWith('http')) {
             url = `https://indeed.com${url}`;
@@ -323,16 +325,19 @@ class JobScraper {
           
           if (title && company) {
             const job = {
-              title,
-              company,
-              location: locationText,
-              salary,
-              description,
+              title: title.trim(),
+              company: company.trim(),
+              location: locationText ? locationText.trim() : location || 'Not specified',
+              salary: salary ? salary.trim() : '',
+              description: description ? description.trim() : '',
               url: url || ''
             };
+            
             const normalizedJob = normalizeJobData(job, 'indeed');
-            jobsStore.set(normalizedJob.id, normalizedJob);
-            jobs.push(normalizedJob);
+            if (normalizedJob.title.toLowerCase() !== 'not specified') {
+              jobsStore.set(normalizedJob.id, normalizedJob);
+              jobs.push(normalizedJob);
+            }
           }
         } catch (err) {
           // Skip this job if there's an error
@@ -340,7 +345,7 @@ class JobScraper {
       });
       
       logger.info(`Indeed returned ${jobs.length} jobs`);
-      return jobs.slice(0, 20);
+      return jobs.slice(0, CONFIG.sources.indeed.maxJobs);
     } catch (error) {
       logger.error('Indeed scraping error:', error.message);
       return [];
@@ -355,7 +360,7 @@ class JobScraper {
       
       const response = await axios.get(url, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'User-Agent': this.getRandomUserAgent(),
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
         },
         timeout: CONFIG.requestTimeout
@@ -373,12 +378,13 @@ class JobScraper {
           
           if (title && company) {
             const job = {
-              title,
-              company,
+              title: title.trim(),
+              company: company.trim(),
               location: 'Remote',
-              description,
+              description: description ? description.trim() : '',
               url: urlElement ? `https://remoteok.com${urlElement}` : ''
             };
+            
             const normalizedJob = normalizeJobData(job, 'remoteok');
             jobsStore.set(normalizedJob.id, normalizedJob);
             jobs.push(normalizedJob);
@@ -389,85 +395,58 @@ class JobScraper {
       });
       
       logger.info(`RemoteOK returned ${jobs.length} jobs`);
-      return jobs.slice(0, 15);
+      return jobs.slice(0, CONFIG.sources.remoteok.maxJobs);
     } catch (error) {
       logger.error('RemoteOK scraping error:', error.message);
       return [];
     }
   }
 
-  async scrapeLinkedIn(keywords, location) {
+  async scrapeGitHub(keywords, location) {
     try {
-      const browser = await this.getBrowser();
-      if (!browser) {
-        logger.warn('Browser not available for LinkedIn scraping');
-        return [];
+      const url = new URL(CONFIG.sources.github.baseUrl);
+      url.searchParams.append('description', keywords || 'developer');
+      if (location && location.toLowerCase() !== 'remote') {
+        url.searchParams.append('location', location);
       }
       
-      const page = await browser.newPage();
+      logger.info(`Scraping GitHub Jobs: ${keywords} in ${location}`);
       
-      // Set realistic headers
-      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-      await page.setViewport({ width: 1280, height: 720 });
-      
-      // Build LinkedIn search URL
-      const encodedKeywords = encodeURIComponent(keywords || 'developer');
-      const encodedLocation = encodeURIComponent(location || '');
-      const linkedinUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodedKeywords}&location=${encodedLocation}`;
-      
-      logger.info(`Scraping LinkedIn: ${keywords} in ${location}`);
-      
-      // Navigate with timeout
-      await page.goto(linkedinUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: 15000
+      const response = await axios.get(url.toString(), {
+        headers: {
+          'User-Agent': this.getRandomUserAgent(),
+          'Accept': 'application/json'
+        },
+        timeout: CONFIG.requestTimeout
       });
       
-      // Wait for job cards
-      await page.waitForSelector('.base-card', { timeout: 10000 }).catch(() => {
-        logger.warn('LinkedIn job cards not found, proceeding anyway');
+      const jobs = [];
+      const jobsData = response.data || [];
+      
+      jobsData.forEach(jobData => {
+        try {
+          const job = {
+            title: jobData.title || '',
+            company: jobData.company || '',
+            location: jobData.location || 'Remote',
+            description: jobData.description || '',
+            url: jobData.url || '',
+            type: jobData.type || 'Full-time',
+            created_at: jobData.created_at
+          };
+          
+          const normalizedJob = normalizeJobData(job, 'github');
+          jobsStore.set(normalizedJob.id, normalizedJob);
+          jobs.push(normalizedJob);
+        } catch (err) {
+          // Skip this job if there's an error
+        }
       });
       
-      // Extract job data
-      const jobs = await page.evaluate(() => {
-        const jobElements = document.querySelectorAll('.base-card');
-        const jobList = [];
-        
-        jobElements.forEach(element => {
-          try {
-            const titleElement = element.querySelector('.base-search-card__title');
-            const companyElement = element.querySelector('.base-search-card__subtitle');
-            const locationElement = element.querySelector('.job-search-card__location');
-            const urlElement = element.querySelector('.base-card__full-link');
-            
-            if (titleElement && companyElement) {
-              jobList.push({
-                title: titleElement.textContent?.trim() || '',
-                company: companyElement.textContent?.trim() || '',
-                location: locationElement?.textContent?.trim() || '',
-                url: urlElement?.href || '',
-                description: ''
-              });
-            }
-          } catch (err) {
-            // Skip this element if there's an error
-          }
-        });
-        
-        return jobList;
-      });
-      
-      await page.close();
-      
-      logger.info(`LinkedIn returned ${jobs.length} jobs`);
-      const normalizedJobs = jobs.slice(0, 15).map(job => {
-        const normalizedJob = normalizeJobData(job, 'linkedin');
-        jobsStore.set(normalizedJob.id, normalizedJob);
-        return normalizedJob;
-      });
-      return normalizedJobs;
+      logger.info(`GitHub Jobs returned ${jobs.length} jobs`);
+      return jobs.slice(0, CONFIG.sources.github.maxJobs);
     } catch (error) {
-      logger.error('LinkedIn scraping error:', error.message);
+      logger.error('GitHub Jobs scraping error:', error.message);
       return [];
     }
   }
@@ -508,11 +487,11 @@ class JobScraper {
         );
       }
       
-      if (CONFIG.sources.linkedin.enabled) {
+      if (CONFIG.sources.github.enabled) {
         scrapePromises.push(
           Promise.race([
-            this.scrapeLinkedIn(keywords, location),
-            new Promise(resolve => setTimeout(() => resolve([]), 10000))
+            this.scrapeGitHub(keywords, location),
+            new Promise(resolve => setTimeout(() => resolve([]), 8000))
           ])
         );
       }
@@ -526,7 +505,7 @@ class JobScraper {
       results.forEach((result, index) => {
         if (result.status === 'fulfilled' && Array.isArray(result.value)) {
           allJobs = allJobs.concat(result.value);
-          const sourceNames = ['indeed', 'remoteok', 'linkedin'];
+          const sourceNames = ['indeed', 'remoteok', 'github'];
           if (index < sourceNames.length) {
             sourcesUsed.push(sourceNames[index]);
           }
@@ -580,19 +559,6 @@ class JobScraper {
 
 // Initialize scraper
 const scraper = new JobScraper();
-
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  logger.info('SIGTERM received, shutting down gracefully');
-  await scraper.closeBrowser();
-  process.exit(0);
-});
-
-process.on('SIGINT', async () => {
-  logger.info('SIGINT received, shutting down gracefully');
-  await scraper.closeBrowser();
-  process.exit(0);
-});
 
 // ========================
 // API ROUTES
@@ -690,7 +656,7 @@ app.get('/api/search/:keywords/:location?',
             remote: job.remote,
             postedDate: job.postedDate,
             source: job.source,
-            skills: job.skills.slice(0, 3) // Show only top 3 skills in list
+            skills: job.skills.slice(0, 3)
           })),
           count: filteredJobs.length,
           stats
@@ -741,31 +707,27 @@ app.get('/api/job/:jobId', async (req, res) => {
       return res.status(404).json({
         success: false,
         error: 'Job not found',
-        message: 'The requested job ID does not exist or has expired'
+        message: 'The requested job ID does not exist or has expired. Try searching for jobs first.',
+        timestamp: new Date().toISOString()
       });
     }
     
-    // Enhanced job details
-    const enhancedJob = {
-      ...job,
-      // Add related jobs (by skills or company)
-      relatedJobs: getRelatedJobs(job),
-      // Add application tips
-      applicationTips: getApplicationTips(job),
-      // Add company info placeholder
-      companyInfo: {
-        size: 'Unknown',
-        industry: 'Technology',
-        website: null
-      }
-    };
-    
     const response = {
       success: true,
-      job: enhancedJob,
+      job: {
+        ...job,
+        description: job.description || 'No description available',
+        fullDetails: {
+          source: job.source,
+          scrapedAt: new Date().toISOString(),
+          url: job.url,
+          applicationMethod: job.url ? 'Apply via link' : 'Contact company directly'
+        }
+      },
       metadata: {
         timestamp: new Date().toISOString(),
-        requestId: req.requestId
+        requestId: req.requestId,
+        cacheInfo: 'Job details are cached for 10 minutes'
       }
     };
     
@@ -807,35 +769,36 @@ app.get('/api/trending/:category?', async (req, res) => {
     logger.info(`Trending jobs request: ${category || 'all categories'}`);
     
     let trendingJobs = [];
-    let categoriesToFetch = [];
     
     if (category) {
       // Find specific category
       const foundCategory = CONFIG.trendingCategories.find(cat => cat.name === category);
       if (foundCategory) {
-        categoriesToFetch = [foundCategory];
+        const searchResult = await scraper.searchJobs(foundCategory.keywords, '');
+        if (searchResult.success) {
+          trendingJobs = searchResult.jobs.slice(0, limit).map(job => ({
+            ...job,
+            category: foundCategory.title
+          }));
+        }
       }
     } else {
-      // Get top 5 trending categories
-      categoriesToFetch = CONFIG.trendingCategories.slice(0, 5);
-    }
-    
-    // Fetch jobs for each category
-    const fetchPromises = categoriesToFetch.map(cat => 
-      scraper.searchJobs(cat.keywords, '')
-    );
-    
-    const results = await Promise.allSettled(fetchPromises);
-    
-    results.forEach((result, index) => {
-      if (result.status === 'fulfilled' && result.value.success) {
-        const categoryJobs = result.value.jobs.slice(0, Math.floor(limit / categoriesToFetch.length));
+      // Get jobs for top 3 trending categories
+      const topCategories = CONFIG.trendingCategories.slice(0, 3);
+      const fetchPromises = topCategories.map(cat => 
+        scraper.searchJobs(cat.keywords, '').then(result => 
+          result.success ? result.jobs.slice(0, Math.ceil(limit / 3)) : []
+        )
+      );
+      
+      const results = await Promise.all(fetchPromises);
+      results.forEach((categoryJobs, index) => {
         trendingJobs.push(...categoryJobs.map(job => ({
           ...job,
-          category: categoriesToFetch[index].title
+          category: topCategories[index].title
         })));
-      }
-    });
+      });
+    }
     
     // Remove duplicates
     const uniqueJobs = [];
@@ -855,11 +818,7 @@ app.get('/api/trending/:category?', async (req, res) => {
       results: {
         jobs: uniqueJobs.slice(0, limit),
         count: uniqueJobs.length,
-        categories: categoriesToFetch.map(cat => ({
-          name: cat.name,
-          title: cat.title,
-          keywords: cat.keywords
-        }))
+        categories: category ? [CONFIG.trendingCategories.find(c => c.name === category)] : CONFIG.trendingCategories.slice(0, 3)
       },
       metadata: {
         timestamp: new Date().toISOString(),
@@ -905,7 +864,7 @@ app.get('/api/locations/popular', async (req, res) => {
     
     const locations = CONFIG.popularLocations.map(location => ({
       name: location,
-      jobCount: Math.floor(Math.random() * 1000) + 100, // Simulated count
+      jobCount: Math.floor(Math.random() * 1000) + 100,
       trending: Math.random() > 0.5
     }));
     
@@ -919,7 +878,7 @@ app.get('/api/locations/popular', async (req, res) => {
       }
     };
     
-    CONFIG.cache.set(cacheKey, response, 1800); // Cache for 30 minutes
+    CONFIG.cache.set(cacheKey, response, 1800);
     
     res.json(response);
   } catch (error) {
@@ -932,7 +891,7 @@ app.get('/api/locations/popular', async (req, res) => {
   }
 });
 
-// Quick search endpoint (default to 'developer' jobs)
+// Quick search endpoint
 app.get('/api/search', async (req, res) => {
   try {
     const searchResult = await scraper.searchJobs('developer', '');
@@ -941,7 +900,15 @@ app.get('/api/search', async (req, res) => {
       success: true,
       message: 'Showing latest developer jobs. Use /api/search/{keywords}/{location} for custom search.',
       results: {
-        jobs: searchResult.jobs.slice(0, 20),
+        jobs: searchResult.jobs.slice(0, 20).map(job => ({
+          id: job.id,
+          title: job.title,
+          company: job.company,
+          location: job.location,
+          salary: job.salary,
+          remote: job.remote,
+          source: job.source
+        })),
         count: Math.min(searchResult.jobs.length, 20)
       },
       metadata: {
@@ -975,18 +942,14 @@ app.get('/api/stats', async (req, res) => {
       });
     }
     
-    // Generate sample stats
     const stats = {
       totalJobsIndexed: jobsStore.size,
       activeSources: Object.keys(CONFIG.sources).filter(s => CONFIG.sources[s].enabled),
       popularKeywords: CONFIG.trendingCategories.slice(0, 5).map(cat => cat.keywords),
       cachePerformance: CONFIG.cache.getStats(),
       lastUpdated: new Date().toISOString(),
-      trendingCategories: CONFIG.trendingCategories.slice(0, 3).map(cat => ({
-        name: cat.name,
-        title: cat.title,
-        jobCount: Math.floor(Math.random() * 500) + 100
-      }))
+      uptime: process.uptime(),
+      memoryUsage: process.memoryUsage()
     };
     
     const response = {
@@ -996,7 +959,7 @@ app.get('/api/stats', async (req, res) => {
       timestamp: new Date().toISOString()
     };
     
-    CONFIG.cache.set(cacheKey, response, 300); // Cache for 5 minutes
+    CONFIG.cache.set(cacheKey, response, 300);
     
     res.json(response);
   } catch (error) {
@@ -1009,12 +972,11 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
-// Clear cache endpoint (admin)
+// Clear cache endpoint
 app.post('/api/admin/cache/clear', (req, res) => {
   try {
     const { auth } = req.body;
     
-    // Simple auth check
     if (!process.env.ADMIN_SECRET || auth !== process.env.ADMIN_SECRET) {
       return res.status(401).json({ 
         success: false,
@@ -1025,15 +987,16 @@ app.post('/api/admin/cache/clear', (req, res) => {
     
     const stats = CONFIG.cache.getStats();
     CONFIG.cache.flushAll();
+    jobsStore.clear();
     
-    logger.info('Cache cleared', { 
+    logger.info('Cache and job store cleared', { 
       requestId: req.requestId,
       previousStats: stats 
     });
     
     res.json({
       success: true,
-      message: 'Cache cleared successfully',
+      message: 'Cache and job store cleared successfully',
       previousStats: stats,
       timestamp: new Date().toISOString()
     });
@@ -1046,72 +1009,6 @@ app.post('/api/admin/cache/clear', (req, res) => {
     });
   }
 });
-
-// ========================
-// HELPER FUNCTIONS
-// ========================
-function getRelatedJobs(job) {
-  const related = [];
-  const allJobs = Array.from(jobsStore.values());
-  
-  // Find jobs with similar skills
-  if (job.skills && job.skills.length > 0) {
-    allJobs.forEach(otherJob => {
-      if (otherJob.id !== job.id) {
-        const commonSkills = job.skills.filter(skill => 
-          otherJob.skills.includes(skill)
-        );
-        if (commonSkills.length > 0) {
-          related.push({
-            id: otherJob.id,
-            title: otherJob.title,
-            company: otherJob.company,
-            location: otherJob.location,
-            salary: otherJob.salary,
-            commonSkills: commonSkills.slice(0, 3)
-          });
-        }
-      }
-    });
-  }
-  
-  // Find jobs from same company
-  const companyJobs = allJobs.filter(otherJob => 
-    otherJob.id !== job.id && 
-    otherJob.company.toLowerCase() === job.company.toLowerCase()
-  ).slice(0, 2);
-  
-  related.push(...companyJobs.map(j => ({
-    id: j.id,
-    title: j.title,
-    company: j.company,
-    location: j.location,
-    salary: j.salary,
-    reason: 'Same company'
-  })));
-  
-  return related.slice(0, 5); // Return top 5 related jobs
-}
-
-function getApplicationTips(job) {
-  const tips = [
-    'Tailor your resume to match the job description keywords',
-    'Highlight relevant skills and experience',
-    'Research the company before applying',
-    'Write a customized cover letter',
-    'Follow up after 1-2 weeks if no response'
-  ];
-  
-  if (job.skills && job.skills.length > 0) {
-    tips.push(`Emphasize these skills: ${job.skills.slice(0, 3).join(', ')}`);
-  }
-  
-  if (job.remote) {
-    tips.push('Mention your remote work experience and self-discipline');
-  }
-  
-  return tips;
-}
 
 // ========================
 // ERROR HANDLING
@@ -1166,7 +1063,7 @@ if (require.main === module) {
     Job Details: http://localhost:${PORT}/api/job/{jobId}
     Trending Jobs: http://localhost:${PORT}/api/trending/{category?}
     Max Jobs: ${CONFIG.maxJobsPerResponse}
-    Total Endpoints: 8
+    Sources: ${Object.keys(CONFIG.sources).filter(s => CONFIG.sources[s].enabled).join(', ')}
     `);
   });
 }
