@@ -4,15 +4,14 @@
   "description": "Production-ready Jobs Scraper API for RapidAPI",
   "main": "index.js",
   "engines": {
-    "node": "24.x"
+    "node": "20.x"
   },
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js",
-    "test": "node test.js"
+    "dev": "nodemon index.js"
   },
   "keywords": ["jobs", "scraper", "career", "api", "rapidapi"],
-  "author": "Mohammed",
+  "author": "Your Name",
   "license": "UNLICENSED",
   "private": true,
   "dependencies": {
@@ -26,9 +25,6 @@
     "winston": "^3.10.0",
     "axios": "^1.6.2",
     "cheerio": "^1.0.0-rc.12",
-    "puppeteer": "^24.15.0",
-    "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "node-cache": "^5.1.2"
   },
   "devDependencies": {
